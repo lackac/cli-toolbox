@@ -1,0 +1,196 @@
+set -euo pipefail
+
+ADEPT_DIR="$HOME/.config/adept"
+DOCKER_IMAGE="bcliang/docker-libgourou:ubuntu"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+
+check_prerequisites() {
+  if ! command -v docker &> /dev/null; then
+    log_error "Docker is not installed or not in PATH"
+    exit 1
+  fi
+
+  if ! docker info &> /dev/null; then
+    log_error "Docker daemon is not running"
+    exit 1
+  fi
+
+  if [[ ! -d "$ADEPT_DIR" ]] || [[ ! -f "$ADEPT_DIR/activation.xml" ]]; then
+    log_error "ADE credentials not found in $ADEPT_DIR"
+    log_error "Run this to create anonymous credentials:"
+    log_error "  yes | docker run -i -v ~/.config/adept:/home/libgourou/output --rm --entrypoint adept_activate $DOCKER_IMAGE --anonymous --random-serial --output-dir /home/libgourou/output"
+    exit 1
+  fi
+}
+
+get_metadata() {
+  local acsm_file="$1"
+  local field="$2"
+  sed -n "s/.*<dc:${field}[^>]*>\([^<]*\)<.*/\1/p" "$acsm_file" 2>/dev/null | head -1
+}
+
+sanitize_filename() {
+  echo "$1" | sed 's/[<>:"/\\|?*]/_/g' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//'
+}
+
+process_acsm() {
+  local acsm_file="$1"
+  local output_dir="$2"
+  local acsm_basename
+  local title
+  local author
+  local format
+  local output_filename
+  local ext
+  local temp_dir
+
+  acsm_basename=$(basename "$acsm_file")
+
+  title=$(get_metadata "$acsm_file" "title")
+  author=$(get_metadata "$acsm_file" "creator")
+  format=$(get_metadata "$acsm_file" "format")
+
+  if [[ -z "$title" ]]; then
+    log_warn "Could not extract title from $acsm_basename, using filename"
+    title="${acsm_basename%.acsm}"
+  fi
+
+  if [[ "$format" == *"pdf"* ]]; then
+    ext="pdf"
+  else
+    ext="epub"
+  fi
+
+  if [[ -n "$author" ]]; then
+    output_filename=$(sanitize_filename "$author - $title").$ext
+  else
+    output_filename=$(sanitize_filename "$title").$ext
+  fi
+
+  log_info "Processing: $acsm_basename"
+  log_info "  Title:  $title"
+  [[ -n "$author" ]] && log_info "  Author: $author"
+  log_info "  Output: $output_filename"
+
+  mkdir -p "$HOME/tmp"
+  temp_dir=$(mktemp -d "$HOME/tmp/acsm2epub.XXXXXX")
+
+  cp "$acsm_file" "$temp_dir/"
+
+  log_info "  Downloading from Adobe..."
+  if ! docker run --rm \
+    -v "$ADEPT_DIR:/home/libgourou/.adept" \
+    -v "$temp_dir:/home/libgourou/files" \
+    --entrypoint acsmdownloader \
+    "$DOCKER_IMAGE" \
+    --adept-directory /home/libgourou/.adept \
+    --output-file "/home/libgourou/files/encrypted.$ext" \
+    "/home/libgourou/files/$acsm_basename" 2>&1
+  then
+    log_error "  Failed to download ebook from Adobe"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  if [[ ! -f "$temp_dir/encrypted.$ext" ]]; then
+    log_error "  Downloaded file not found"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  log_info "  Removing DRM..."
+  if ! docker run --rm \
+    -v "$ADEPT_DIR:/home/libgourou/.adept" \
+    -v "$temp_dir:/home/libgourou/files" \
+    --entrypoint adept_remove \
+    "$DOCKER_IMAGE" \
+    --adept-directory /home/libgourou/.adept \
+    --output-file "/home/libgourou/files/decrypted.$ext" \
+    "/home/libgourou/files/encrypted.$ext" 2>&1
+  then
+    log_error "  Failed to remove DRM"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  if [[ ! -f "$temp_dir/decrypted.$ext" ]]; then
+    log_error "  Decrypted file not found"
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  mv "$temp_dir/decrypted.$ext" "$output_dir/$output_filename"
+  log_info "  Created: $output_dir/$output_filename"
+
+  if command -v trash &> /dev/null; then
+    trash "$acsm_file"
+    log_info "  Moved $acsm_basename to Trash"
+  else
+    log_warn "  'trash' command not found, keeping original ACSM"
+  fi
+
+  rm -rf "$temp_dir"
+
+  return 0
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: acsm2epub file1.acsm [file2.acsm ...]"
+    echo
+    echo "Converts ACSM files to DRM-free EPUB/PDF files."
+    echo "Output files are saved to the current directory."
+    echo
+    echo "Prerequisites:"
+    echo "  - Docker must be running"
+    echo "  - ADE credentials in ~/.config/adept/"
+    exit 1
+  fi
+
+  check_prerequisites
+
+  local output_dir
+  output_dir=$(pwd)
+
+  local success_count=0
+  local fail_count=0
+
+  for acsm_file in "$@"; do
+    if [[ ! "$acsm_file" = /* ]]; then
+      acsm_file="$(pwd)/$acsm_file"
+    fi
+
+    if [[ ! -f "$acsm_file" ]]; then
+      log_error "File not found: $acsm_file"
+      ((fail_count++))
+      continue
+    fi
+
+    if [[ ! "$acsm_file" == *.acsm ]]; then
+      log_error "Not an ACSM file: $acsm_file"
+      ((fail_count++))
+      continue
+    fi
+
+    if process_acsm "$acsm_file" "$output_dir"; then
+      ((success_count++))
+    else
+      ((fail_count++))
+    fi
+
+    echo
+  done
+
+  echo "---"
+  log_info "Completed: $success_count succeeded, $fail_count failed"
+}
+
+main "$@"
