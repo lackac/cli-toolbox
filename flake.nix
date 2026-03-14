@@ -43,9 +43,13 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              jq
-              just
+            packages = [
+              pkgs.jq
+              pkgs.just
+              self.packages.${system}.acsm2epub
+              self.packages.${system}.boox2readwise
+              self.packages.${system}.nerd-fonts
+              self.packages.${system}.xpwgen
             ];
           };
         }
