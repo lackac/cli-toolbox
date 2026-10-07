@@ -7,6 +7,15 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+    };
   };
 
   outputs =
@@ -14,6 +23,8 @@
       self,
       nixpkgs,
       treefmt-nix,
+      pyproject-nix,
+      uv2nix,
       ...
     }:
     let
@@ -32,7 +43,7 @@
         let
           pkgs = pkgsFor system;
         in
-        import ./pkgs { inherit pkgs; }
+        import ./pkgs { inherit pkgs pyproject-nix uv2nix; }
       );
 
       devShells = forAllSystems (

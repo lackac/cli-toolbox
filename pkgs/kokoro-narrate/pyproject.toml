@@ -1,0 +1,22 @@
+[project]
+name = "kokoro-narrate"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "mlx-audio==0.5.7",
+  "mlx==0.32.3",
+  "mlx-metal==0.32.3",
+  "misaki[en]==0.9.4",
+  "en-core-web-sm==3.8.0",
+]
+
+[tool.uv]
+package = false
+no-build = true
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[tool.uv.sources]
+# Pin the macOS 26 wheel variants used in the audition.
+mlx = { url = "https://files.pythonhosted.org/packages/4a/c1/13ff85d72f7cf01239c1031688b11cf1c7a3f0c7380636728976e510bfbd/mlx-0.32.3-cp312-cp312-macosx_26_0_arm64.whl" }
+mlx-metal = { url = "https://files.pythonhosted.org/packages/ee/38/cb985ca86979ca6f954a2a45eb6e3f9b787c5d55227564a04f87953b3d56/mlx_metal-0.32.3-py3-none-macosx_26_0_arm64.whl" }
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
